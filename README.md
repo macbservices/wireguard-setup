@@ -1,2 +1,3 @@
 # wireguard-setup
-# bash <(curl -sSL https://raw.githubusercontent.com/macbservices/macbservices-setup/main/setup.sh)
+# bash <(curl -sSL https://raw.githubusercontent.com/macbservices/wireguard-setup/main/setup.sh)
+
