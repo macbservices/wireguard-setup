@@ -7,6 +7,6 @@ Este repositório contém o script necessário para instalar e configurar o Wire
 1. Faça o download do script:
    
    ```bash
-   bash <(curl -sSL https://github.com/macbservices/wireguard-setup/blob/main/setup.sh)
+   bash <(curl -sSL https://raw.githubusercontent.com/macbservices/wireguard-setup/refs/heads/main/setup.sh)
 
 
