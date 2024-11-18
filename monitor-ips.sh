@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# Função para garantir permissões de execução para o script
+chmod +x $0
+
 # Certifique-se de que o WireGuard está instalado
 if ! command -v wg &> /dev/null; then
     echo "WireGuard não está instalado. Instalando..."
