@@ -1,77 +1,72 @@
 #!/bin/bash
 
-# Solicitar o range de IPs da rede privada
-echo "Exemplo de range IP da rede privada: 100.102.90.0/24"
-read -p "Digite o range de IPs da rede privada (exemplo: 100.102.90.0/24): " NETWORK_RANGE
+# Função para verificar e instalar pacotes necessários
+install_dependencies() {
+    echo "Verificando e instalando dependências necessárias..."
 
-# Solicitar o range de IPs fictícios
-echo "Exemplo de range IP fictício: 100.100.100.0/24"
-read -p "Digite o range de IPs fictícios (exemplo: 100.100.100.0/24): " FICTITIOUS_RANGE
+    # Atualiza o sistema
+    sudo apt update -y
 
-# Instalar WireGuard e dependências
-echo "Instalando o WireGuard e dependências..."
-sudo apt update
-sudo apt install -y wireguard iptables iproute2
+    # Instala pacotes essenciais
+    sudo apt install -y \
+        nmap \
+        wireguard \
+        wireguard-tools \
+        curl \
+        iptables \
+        dnsutils \
+        iproute2 \
+        ufw
 
-# Configurar WireGuard
-WG_CONF="/etc/wireguard/wg0.conf"
+    echo "Dependências instaladas com sucesso!"
+}
 
-echo "Configurando o WireGuard..."
+# Função principal do script
+setup_wireguard() {
+    # Verificar se o WireGuard já está instalado
+    if ! command -v wg &> /dev/null; then
+        echo "WireGuard não encontrado. Instalando..."
+        install_dependencies
+    else
+        echo "WireGuard já está instalado!"
+    fi
 
-# Gerar as chaves para o servidor WireGuard
-PRIVATE_KEY=$(wg genkey)
-PUBLIC_KEY=$(echo "$PRIVATE_KEY" | wg pubkey)
+    # Perguntar pelo range IP da rede privada
+    read -p "Digite o range IP da sua rede privada (exemplo: 100.102.90.0/24): " PRIVATE_RANGE
+    echo "Range IP da rede privada configurado como $PRIVATE_RANGE"
 
-# Configuração inicial do WireGuard
-cat <<EOL > $WG_CONF
-[Interface]
-Address = $NETWORK_RANGE
-PrivateKey = $PRIVATE_KEY
-ListenPort = 51820
+    # Perguntar pelo range IP fictício
+    read -p "Digite o range IP para os IPs fictícios (exemplo: 100.100.100.0/24): " FICTITIOUS_RANGE
+    echo "Range IP fictício configurado como $FICTITIOUS_RANGE"
 
-SaveConfig = true
+    # Perguntar qual porta será usada pelo WireGuard
+    read -p "Digite a porta para o WireGuard (exemplo: 51820): " WG_PORT
+    echo "Porta do WireGuard configurada como $WG_PORT"
 
-EOL
+    # Criar o arquivo de configuração do WireGuard
+    WG_CONF="/etc/wireguard/wg0.conf"
 
-# Adicionar configuração de firewall para permitir tráfego do WireGuard
-echo "Configurando regras de firewall..."
-sudo ufw allow 51820/udp
-sudo ufw enable
+    # Gerar chaves privadas e públicas
+    PRIVATE_KEY=$(wg genkey)
+    PUBLIC_KEY=$(echo "$PRIVATE_KEY" | wg pubkey)
+    echo "Chaves geradas com sucesso!"
 
-# Exemplo de script que vai monitorar e adicionar novos IPs fictícios
-echo "Monitorando novos dispositivos e configurando IPs fictícios..."
+    # Criar configuração do WireGuard
+    echo "[Interface]" > $WG_CONF
+    echo "PrivateKey = $PRIVATE_KEY" >> $WG_CONF
+    echo "Address = $FICTITIOUS_RANGE" >> $WG_CONF
+    echo "ListenPort = $WG_PORT" >> $WG_CONF
+    echo "SaveConfig = true" >> $WG_CONF
+    echo "" >> $WG_CONF
+    echo "[Peer]" >> $WG_CONF
+    echo "PublicKey = $PUBLIC_KEY" >> $WG_CONF
+    echo "AllowedIPs = $PRIVATE_RANGE" >> $WG_CONF
 
-while true; do
-    # Liste os IPs ativos na rede privada
-    for IP in $(nmap -sn $NETWORK_RANGE | grep "Nmap scan report for" | awk '{print $NF}'); do
-        # Verifique se o IP já existe na configuração do WireGuard
-        if ! grep -q "$IP" "$WG_CONF"; then
-            echo "Novo IP detectado: $IP"
-            
-            # Pergunte ao usuário se deseja criar um IP fictício para o novo dispositivo
-            read -p "Deseja criar um IP fictício para $IP? (s/n): " RESP
-            if [[ "$RESP" == "s" ]]; then
-                # Gere um par de chaves para o cliente
-                PRIVATE_KEY_CLIENT=$(wg genkey)
-                PUBLIC_KEY_CLIENT=$(echo "$PRIVATE_KEY_CLIENT" | wg pubkey)
+    # Reiniciar o WireGuard para aplicar a configuração
+    sudo systemctl restart wg-quick@wg0
+    sudo systemctl enable wg-quick@wg0
+    echo "WireGuard configurado e iniciado com sucesso!"
+}
 
-                # Gere um IP fictício dentro do range fornecido
-                FICTITIOUS_IP="100.100.$(shuf -i 2-254 -n 1).$(shuf -i 2-254 -n 1)"
-
-                # Adicione a configuração ao arquivo WireGuard
-                echo -e "\n[Peer]" >> "$WG_CONF"
-                echo "PublicKey = $PUBLIC_KEY_CLIENT" >> "$WG_CONF"
-                echo "AllowedIPs = $FICTITIOUS_IP/32" >> "$WG_CONF"
-                
-                echo "Configuração adicionada para $IP com IP fictício $FICTITIOUS_IP"
-                echo "Chave privada do cliente: $PRIVATE_KEY_CLIENT"
-                
-                # Reinicie o WireGuard para aplicar as mudanças
-                wg syncconf wg0 <(wg-quick strip wg0)
-            fi
-        fi
-    done
-
-    # Aguarde 30 segundos antes de checar novamente
-    sleep 30
-done
+# Iniciar o processo
+setup_wireguard
