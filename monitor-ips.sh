@@ -3,7 +3,7 @@
 # Função para garantir permissões de execução para o script
 chmod +x $0
 
-# Certifique-se de que o WireGuard está instalado
+# Certifique-se de que o WireGuard e o nmap estão instalados
 if ! command -v wg &> /dev/null; then
     echo "WireGuard não está instalado. Instalando..."
     sudo apt update -y
