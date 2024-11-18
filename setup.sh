@@ -1,64 +1,96 @@
 #!/bin/bash
 
-# Instalar dependências necessárias
-echo "Instalando dependências..."
-sudo apt update -y
-sudo apt install -y wireguard nmap
+# Função para instalar dependências
+install_dependencies() {
+  echo "Instalando dependências..."
+  sudo apt update
+  sudo apt install -y wireguard nmap iptables curl
+}
 
-# Perguntar ao usuário o range da rede privada
-echo "Digite o range de IP da sua rede privada (exemplo: 100.102.90.0/24):"
-read NETWORK_RANGE
+# Função para criar as chaves do servidor WireGuard
+generate_server_keys() {
+  echo "Gerando as chaves para o servidor WireGuard..."
+  wg genkey | tee /etc/wireguard/privatekey | wg pubkey > /etc/wireguard/publickey
+}
 
-# Perguntar ao usuário o range de IP fictício
-echo "Digite o range de IP fictício para novos dispositivos (exemplo: 100.100.100.1/24):"
-read FICTITIOUS_RANGE
+# Função para configurar o servidor WireGuard
+configure_wireguard_server() {
+  echo "Configurando o WireGuard no servidor..."
 
-# Instalar e configurar o WireGuard
-echo "Instalando o WireGuard..."
-sudo apt install -y wireguard
+  # Perguntar o range de IPs privados
+  echo "Digite o range de IPs privados (exemplo: 100.102.90.0/24):"
+  read private_range
+  echo "Digite o range de IPs fictícios (exemplo: 100.100.100.0/24):"
+  read fictitious_range
 
-# Configurar o WireGuard (usando as variáveis definidas)
-echo "Configurando o WireGuard..."
-WG_CONF="/etc/wireguard/wg0.conf"
-PRIVATE_KEY=$(wg genkey)
-PUBLIC_KEY=$(echo "$PRIVATE_KEY" | wg pubkey)
+  # Configuração do servidor WireGuard
+  cat > /etc/wireguard/wg0.conf <<EOL
+[Interface]
+PrivateKey = $(cat /etc/wireguard/privatekey)
+Address = $fictitious_range
+ListenPort = 51820
 
-# Criar o arquivo de configuração do WireGuard
-echo -e "[Interface]\nAddress = $FICTITIOUS_RANGE\nPrivateKey = $PRIVATE_KEY\nListenPort = 51820" > $WG_CONF
+[Peer]
+PublicKey = $(cat /etc/wireguard/publickey)
+AllowedIPs = 0.0.0.0/0
+EOL
+}
 
-# Reiniciar o WireGuard
-wg-quick up wg0
+# Função para configurar as VPS com IP fictício
+configure_vps_wireguard() {
+  echo "Digite o IP fictício para cada VPS (exemplo: 100.100.100.11):"
+  read vps_ip
 
-# Função para monitorar novos IPs na rede privada
-echo "Monitorando novos IPs na rede privada..."
-while true; do
-    # Listar IPs ativos na rede privada usando o nmap
-    for IP in $(nmap -sn $NETWORK_RANGE | grep "Nmap scan report for" | awk '{print $NF}'); do
-        # Verifique se o IP já existe na configuração do WireGuard
-        if ! grep -q "$IP" "$WG_CONF"; then
-            echo "Novo IP detectado: $IP"
-            
-            # Perguntar ao usuário se deseja criar um IP fictício para o novo dispositivo
-            read -p "Deseja criar um IP fictício para $IP? (s/n): " RESP
-            if [[ "$RESP" == "s" ]]; then
-                # Gere um par de chaves para o cliente
-                NEW_PRIVATE_KEY=$(wg genkey)
-                NEW_PUBLIC_KEY=$(echo "$NEW_PRIVATE_KEY" | wg pubkey)
-                FICTITIOUS_IP="100.100.$(shuf -i 2-254 -n 1).$(shuf -i 2-254 -n 1)"
-                
-                # Adicionar a configuração ao arquivo WireGuard
-                echo -e "\n[Peer]" >> "$WG_CONF"
-                echo "PublicKey = $NEW_PUBLIC_KEY" >> "$WG_CONF"
-                echo "AllowedIPs = $FICTITIOUS_IP/32" >> "$WG_CONF"
-                
-                echo "Configuração adicionada para $IP com IP fictício $FICTITIOUS_IP"
-                echo "Chave privada do cliente: $NEW_PRIVATE_KEY"
-                
-                # Reiniciar o WireGuard para aplicar as mudanças
-                wg syncconf wg0 <(wg-quick strip wg0)
-            fi
-        fi
-    done
-    # Aguardar 30 segundos antes de checar novamente
-    sleep 30
-done
+  # Criar arquivo de configuração para a VPS
+  cat > /etc/wireguard/wg0.conf <<EOL
+[Interface]
+PrivateKey = $(cat /etc/wireguard/privatekey)
+Address = $vps_ip/32
+
+[Peer]
+PublicKey = $(cat /etc/wireguard/publickey)
+Endpoint = $server_ip:51820
+AllowedIPs = 0.0.0.0/0
+EOL
+}
+
+# Função para monitorar a rede e verificar IPs
+monitor_ips() {
+  echo "Monitorando IPs na rede privada..."
+  nmap -sP $private_range | grep -oP 'Nmap scan report for \K[0-9.]+'
+}
+
+# Função para liberar portas
+open_ports() {
+  echo "Deseja liberar alguma porta? (exemplo: 22 para SSH, 80 para HTTP)"
+  read port
+  sudo ufw allow $port
+}
+
+# Instalar dependências
+install_dependencies
+
+# Gerar chaves para o servidor
+generate_server_keys
+
+# Configurar o servidor WireGuard
+configure_wireguard_server
+
+# Perguntar se deseja configurar as VPS
+echo "Você deseja configurar as VPS com IP fictício? (S/N)"
+read configure_vps
+if [[ "$configure_vps" == "S" || "$configure_vps" == "s" ]]; then
+  configure_vps_wireguard
+fi
+
+# Monitorar os IPs
+monitor_ips
+
+# Perguntar se deseja liberar portas
+echo "Deseja liberar portas adicionais? (S/N)"
+read open_ports_response
+if [[ "$open_ports_response" == "S" || "$open_ports_response" == "s" ]]; then
+  open_ports
+fi
+
+echo "Configuração completa! O WireGuard está pronto para ser usado."
