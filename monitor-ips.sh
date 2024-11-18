@@ -15,17 +15,22 @@ read NETWORK_RANGE
 echo "Digite o range de IP fictício para novos dispositivos (exemplo: 100.100.100.1/24):"
 read FICTITIOUS_RANGE
 
-# Instalar e configurar o WireGuard
-echo "Configurando o WireGuard..."
+# Verificar se a interface WireGuard já existe
 WG_CONF="/etc/wireguard/wg0.conf"
-PRIVATE_KEY=$(wg genkey)
-PUBLIC_KEY=$(echo "$PRIVATE_KEY" | wg pubkey)
+if [[ ! -f "$WG_CONF" ]]; then
+    echo "Configurando o WireGuard..."
+    # Criar o arquivo de configuração do WireGuard se não existir
+    PRIVATE_KEY=$(wg genkey)
+    PUBLIC_KEY=$(echo "$PRIVATE_KEY" | wg pubkey)
+    
+    # Criar o arquivo de configuração do WireGuard
+    echo -e "[Interface]\nAddress = $FICTITIOUS_RANGE\nPrivateKey = $PRIVATE_KEY\nListenPort = 51820" | sudo tee $WG_CONF
 
-# Criar o arquivo de configuração do WireGuard
-echo -e "[Interface]\nAddress = $FICTITIOUS_RANGE\nPrivateKey = $PRIVATE_KEY\nListenPort = 51820" > $WG_CONF
-
-# Reiniciar o WireGuard
-wg-quick up wg0
+    # Ativar a interface WireGuard
+    sudo wg-quick up wg0
+else
+    echo "A interface WireGuard já está configurada. Continuando o monitoramento..."
+fi
 
 # Função para monitorar novos IPs na rede privada
 echo "Monitorando novos IPs na rede privada..."
@@ -53,7 +58,7 @@ while true; do
                 echo "Chave privada do cliente: $NEW_PRIVATE_KEY"
                 
                 # Reiniciar o WireGuard para aplicar as mudanças
-                wg syncconf wg0 <(wg-quick strip wg0)
+                sudo wg syncconf wg0 <(wg-quick strip wg0)
             fi
         fi
     done
