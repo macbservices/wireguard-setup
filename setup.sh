@@ -1,65 +1,60 @@
 #!/bin/bash
 
-set -e
+# Definições iniciais
+WIREGUARD_INTERFACE="wg0"
+PRIVATE_IP_RANGE="100.102.90.0/24" # Substitua pelo seu range de IPs privados
+FAKE_IP_BASE="100.100.100"        # Substitua pelo range base para IPs fictícios
+WG_CONF="/etc/wireguard/$WIREGUARD_INTERFACE.conf"
 
-echo "Configurando o WireGuard e IPs fictícios para VPS..."
-
-# Dependências necessárias
-echo "Instalando dependências..."
-sudo apt update
-sudo apt install -y wireguard iptables-persistent ufw nmap
-
-# Configurações gerais
-echo "Habilitando redirecionamento de pacotes..."
-if ! grep -q "net.ipv4.ip_forward=1" /etc/sysctl.conf; then
-    echo "net.ipv4.ip_forward=1" | sudo tee -a /etc/sysctl.conf
+# Verificar se está sendo executado como root
+if [[ $EUID -ne 0 ]]; then
+    echo "Este script precisa ser executado como root!"
+    exit 1
 fi
-sudo sysctl -p
 
-# Perguntar o range de IPs privados
-read -p "Digite o range de IPs privados na rede (exemplo: 100.102.90.0/24): " PRIVATE_IP_RANGE
-echo "Range de IPs privados configurado como: $PRIVATE_IP_RANGE"
+# Instalar dependências necessárias
+echo "Instalando dependências necessárias..."
+apt update
+apt install -y wireguard-tools iptables nmap ufw curl
 
-# Perguntar o range de IPs fictícios
-read -p "Digite o range de IPs fictícios (exemplo: 100.100.100.0/24): " FAKE_IP_RANGE
-FAKE_IP_BASE=$(echo $FAKE_IP_RANGE | cut -d'/' -f1 | awk -F. '{print $1"."$2"."$3}')
-
-echo "Range de IPs fictícios configurado como: $FAKE_IP_RANGE"
-echo
-
-# Configurar interface WireGuard
-if [ ! -f /etc/wireguard/wg0.conf ]; then
-    echo "Gerando configuração inicial do WireGuard..."
-    sudo bash -c "cat > /etc/wireguard/wg0.conf" <<EOL
+# Configurar o WireGuard
+if [[ ! -f $WG_CONF ]]; then
+    echo "Configurando o WireGuard..."
+    umask 077
+    wg genkey | tee /etc/wireguard/private.key | wg pubkey > /etc/wireguard/public.key
+    PRIVATE_KEY=$(cat /etc/wireguard/private.key)
+    cat > $WG_CONF <<EOL
 [Interface]
-PrivateKey = $(wg genkey)
+PrivateKey = $PRIVATE_KEY
 Address = $FAKE_IP_BASE.1/24
 ListenPort = 51820
-SaveConfig = true
+PostUp = iptables -A FORWARD -i $WIREGUARD_INTERFACE -j ACCEPT; iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
+PostDown = iptables -D FORWARD -i $WIREGUARD_INTERFACE -j ACCEPT; iptables -t nat -D POSTROUTING -o eth0 -j MASQUERADE
 EOL
-    sudo systemctl enable wg-quick@wg0
-    sudo systemctl start wg-quick@wg0
+    systemctl enable wg-quick@$WIREGUARD_INTERFACE
+    systemctl start wg-quick@$WIREGUARD_INTERFACE
 else
     echo "WireGuard já configurado. Pulando..."
 fi
 
-# Monitorar IPs na rede privada
+# Monitorar a rede e configurar IPs fictícios
 echo "Monitorando IPs na rede privada..."
-IP_LIST=$(nmap -sn $PRIVATE_IP_RANGE | grep "Nmap scan report for" | awk '{print $5}')
+IP_LIST=$(nmap -sn $PRIVATE_IP_RANGE | grep "Nmap scan report for" | awk '{print $NF}' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$')
+
 if [ -z "$IP_LIST" ]; then
-    echo "Nenhum IP encontrado na rede privada."
+    echo "Nenhum IP válido encontrado na rede privada."
     exit 1
 fi
 
-echo "IPs encontrados: $IP_LIST"
+echo "IPs válidos encontrados: $IP_LIST"
 echo
 
-# Processar cada IP
+# Configurar cada IP
 for PRIVATE_IP in $IP_LIST; do
     echo "Configurando o IP privado: $PRIVATE_IP"
 
     # Verificar se já existe configuração de IP fictício
-    if grep -q "$PRIVATE_IP" /etc/wireguard/wg0.conf; then
+    if grep -q "$PRIVATE_IP" $WG_CONF; then
         echo "IP $PRIVATE_IP já possui configuração fictícia. Pulando..."
         continue
     fi
@@ -71,7 +66,7 @@ for PRIVATE_IP in $IP_LIST; do
     echo "Adicionando configuração para $PRIVATE_IP -> $FAKE_IP..."
 
     # Configuração no WireGuard
-    sudo bash -c "cat >> /etc/wireguard/wg0.conf" <<EOL
+    sudo bash -c "cat >> $WG_CONF" <<EOL
 
 [Peer]
 PublicKey = $(wg genkey | tee /etc/wireguard/$PRIVATE_IP.pub)
@@ -99,12 +94,9 @@ EOL
     echo
 done
 
-# Salvar configurações do iptables
+# Salvar regras do iptables para persistência
 echo "Salvando regras do iptables..."
-sudo netfilter-persistent save
+iptables-save > /etc/iptables/rules.v4
+echo "Regras salvas com sucesso!"
 
-# Reiniciar WireGuard para aplicar mudanças
-echo "Reiniciando o WireGuard..."
-sudo systemctl restart wg-quick@wg0
-
-echo "Configuração concluída! O acesso externo está configurado."
+echo "Configuração completa! O WireGuard está pronto para ser usado."
